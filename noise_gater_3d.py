@@ -10,7 +10,11 @@ def wiener_filter(magnitude, threshold):
     return term / (1 + term)
 
 def gate_filter(magnitude, threshold):
-    pass
+    comparison = magnitude < threshold
+    comparison[comparison == True] = 0
+    comparison[comparison == False] = 1
+    return comparison
+    #return 0 if magnitude < threshold else 1
 
 class NoiseGater:
     ''' An approach to decrease the shot noise in images using windowed fourier transforms. 
@@ -113,7 +117,8 @@ class NoiseGater:
         threshold = noise * self.gamma
 
         #section_filter = se[self.filter_fn](fourier_magnitude, threshold)
-        section_filter = wiener_filter(fourier_magnitude, threshold)
+        #section_filter = wiener_filter(fourier_magnitude, threshold)
+        section_filter = gate_filter(fourier_magnitude, threshold)
         section_filter[self.xstart:self.xend, self.ystart:self.yend, self.tstart:self.tend] = 1
         
         final_fourier = fourier * section_filter
@@ -140,7 +145,7 @@ def get_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("-f", "--files", required = True, help = "file with path to FITs images for sequence")
     ap.add_argument("-b", "--beta", help = "image cube of appropriate size with beta image")
-    ap.add_argument("-g", "--gamma", help = "gamma level to define threshole for noise")
+    ap.add_argument("-g", "--gamma", type = float, help = "gamma level to define threshole for noise")
     ap.add_argument("-v", "--verbose", help = "prints informatino for each step")
     args = vars(ap.parse_args())
     return args
@@ -175,4 +180,6 @@ if __name__ == "__main__":
             image = fits.open(fn.split("\n")[0])
             image[0].data = clean_cube[:,:,i]
             image[0].header['cleaned'] = "{}".format(datetime.datetime.now().isoformat())
+            new_fn = fn.split(".fits")[0] + "_cleaned.fits"
+            image.write_to(new_fn)
             image.close()
