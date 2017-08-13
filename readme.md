@@ -1,6 +1,6 @@
 # Noise gater
 
-** As of now only the 3D version is functioning **
+**As of now only the 3D version is functioning**
 
 This is a python implementation of DeForest (2017)'s approach to reducing noise in images using regional fourier transforms to remove noise from images. For the full details of how it works, please refer to the original paper in The Astrophysical Journal, Volume 838, Issue 2, article id. 155, 10 pp, 2017. Please note that the Southwest Research Institute, DeForest's home institution, is in the process of patenting this algorithm so any applications should be cleared by him.
 
@@ -12,6 +12,11 @@ The program has three options:
 * __verbose__: outputs information regarding the current state of the program
 * __gama__: this indicates how much noise should be removed, for a more rigorous definition see DeForest (2017)
 * __files__: a text file that lists all the FITS image, one per line, to clean. These should be in order of time. Output images will be in the same location with a similar name, only with "_cleaned" appended.
+
+Example call:
+```
+python noise_gater_3d.py --verbose --files file_path.txt --gamma 3
+```
 
 # Results
 In DeForest (2017) there are example results from his Perl Data Langauge code that are similar to these. You can see example.mp4 in this folder for the type of improvement expected. A frame from this movie is shown below:
