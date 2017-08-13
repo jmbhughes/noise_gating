@@ -1,7 +1,7 @@
 from astropy.io import fits
-import matplotlib
-matplotlib.use("TkAgg")
-import matplotlib.pyplot as plt
+# import matplotlib
+# matplotlib.use("TkAgg")
+# import matplotlib.pyplot as plt
 import numpy as np
 import argparse, datetime
 
@@ -14,7 +14,6 @@ def gate_filter(magnitude, threshold):
     comparison[comparison == True] = 0
     comparison[comparison == False] = 1
     return comparison
-    #return 0 if magnitude < threshold else 1
 
 class NoiseGater:
     ''' An approach to decrease the shot noise in images using windowed fourier transforms. 
@@ -39,6 +38,7 @@ class NoiseGater:
         self.xwidth, self.ywidth, self.twidth = xwidth, ywidth, twidth
         self.xstep, self.ystep, self.tstep = xstep, ystep, tstep
 
+        # the coordinates for the inner most 3x3 portion of the filter, always set to True
         self.xstart, self.xend = self.xwidth // 2 - 1, self.xwidth // 2 + 2
         self.ystart, self.yend = self.ywidth // 2 - 1, self.ywidth // 2 + 2
         self.tstart, self.tend = self.twidth // 2 - 1, self.twidth // 2 + 2
@@ -119,7 +119,7 @@ class NoiseGater:
         #section_filter = se[self.filter_fn](fourier_magnitude, threshold)
         #section_filter = wiener_filter(fourier_magnitude, threshold)
         section_filter = gate_filter(fourier_magnitude, threshold)
-        section_filter[self.xstart:self.xend, self.ystart:self.yend, self.tstart:self.tend] = 1
+        section_filter[self.xstart:self.xend, self.ystart:self.yend, self.tstart:self.tend] = True
         
         final_fourier = fourier * section_filter
         final_image = self.hanning_window * np.abs(np.fft.ifftn(np.fft.ifftshift(final_fourier)))
@@ -143,38 +143,40 @@ class NoiseGater:
     
 def get_args():
     ap = argparse.ArgumentParser()
+    # ap.add_argument("-b", "--beta", help = "image cube of appropriate size with beta image")
     ap.add_argument("-f", "--files", required = True, help = "file with path to FITs images for sequence")
-    ap.add_argument("-b", "--beta", help = "image cube of appropriate size with beta image")
     ap.add_argument("-g", "--gamma", type = float, help = "gamma level to define threshole for noise")
-    ap.add_argument("-v", "--verbose", help = "prints informatino for each step")
+    ap.add_argument("-v", "--verbose", action='store_true', help = "prints information for each step")
     args = vars(ap.parse_args())
     return args
 
 if __name__ == "__main__":
     args = get_args()
 
+    # Open files
     if args['verbose']:
         print("Opening files")
-        
     with open(args['files']) as f:
         files = f.readlines()
-
     image_stack = []
     for fn in files:
-        image = fits.open(fn.split("\n")[0])
-        image_stack.append(image[0].data.copy())
-        image.close()
+        with fits.open(fn.split("\n")[0]) as image:
+            image_stack.append(image[0].data)
 
+    # Stack into a time dependent image cube
     if args['verbose']:
         print("Making image cube")
     image_cube = np.stack(image_stack)
 
+    # Perform the cleaning step
     if args['verbose']:
-        print("Cleaning image")
-
+        print("Cleaning image, this may take a while!")
     ng = NoiseGater(image_cube, None, beta_percentile=50, beta_count=10000)
     clean_cube = ng.clean() 
 
+    # Write out files
+    if args['verbose']:
+        print("Writing out files")
     for i, fn in enumerate(files):
         if i > ng.twidth and i < (image_cube.shape[2] - ng.twidth):
             image = fits.open(fn.split("\n")[0])
