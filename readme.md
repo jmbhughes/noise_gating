@@ -29,7 +29,7 @@ The upper left is a good image, no cleaning necessary. However, we often see ima
 
 ## Todo
 There are many features not yet added to this code yet:
-* a parallelized version
+* consolidate parallel version by Catalin Mitelut
 * moving computation into C for quicker performance
 * correcting the edges of images and the time series
 * update the 2D version
