@@ -179,3 +179,4 @@ if __name__ == "__main__":
                 image[0].header['cleaned'] = "{}".format(datetime.datetime.now().isoformat())
                 new_fn = fn.split(".fits")[0] + "_cleaned.fits"
                 fits.writeto(new_fn, image[0].data, image[0].header, overwrite=True)
+                
