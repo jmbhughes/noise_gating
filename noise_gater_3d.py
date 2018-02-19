@@ -1,18 +1,15 @@
 from astropy.io import fits
-# import matplotlib
-# matplotlib.use("TkAgg")
-# import matplotlib.pyplot as plt
 import numpy as np
 import argparse, datetime
+from multiprocessing import Pool
 
 def wiener_filter(magnitude, threshold):
     term = magnitude / threshold
     return term / (1 + term)
 
 def gate_filter(magnitude, threshold):
-    comparison = magnitude < threshold
-    comparison[comparison == True] = 0
-    comparison[comparison == False] = 1
+    comparison = np.logical_not(magnitude < threshold)
+    comparison[5:8,5:8,5:8] = True
     return comparison
 
 class NoiseGater:
@@ -116,30 +113,25 @@ class NoiseGater:
         noise = self.beta * imbar
         threshold = noise * self.gamma
 
-        #section_filter = se[self.filter_fn](fourier_magnitude, threshold)
         #section_filter = wiener_filter(fourier_magnitude, threshold)
         section_filter = gate_filter(fourier_magnitude, threshold)
-        section_filter[self.xstart:self.xend, self.ystart:self.yend, self.tstart:self.tend] = True
-        
         final_fourier = fourier * section_filter
         final_image = self.hanning_window * np.abs(np.fft.ifftn(np.fft.ifftshift(final_fourier)))
-
-        del image_section
-        del fourier_magnitude
-        del final_fourier
-
         return final_image
 
     def clean(self):
         final_image = np.zeros_like(self.image_cube)
+        with Pool() as p:
+            sections = p.map(self._process_section, range(len(self.coordinates)))
+
         for i in range(len(self.coordinates)):
-            section = self._process_section(i)
+            section = sections[i]
+            print(np.min(section), np.max(section))
             x, y, t = self.coordinates[i]
             final_image[x-self.xwidth//2 : x+self.xwidth//2,
                         y-self.ywidth//2 : y+self.ywidth//2,
                         t-self.twidth//2 : t+self.twidth//2] += section
         return final_image
-
     
 def get_args():
     ap = argparse.ArgumentParser()
@@ -156,8 +148,10 @@ if __name__ == "__main__":
     # Open files
     if args['verbose']:
         print("Opening files")
+
     with open(args['files']) as f:
         files = f.readlines()
+    
     image_stack = []
     for fn in files:
         with fits.open(fn.split("\n")[0]) as image:
@@ -166,7 +160,8 @@ if __name__ == "__main__":
     # Stack into a time dependent image cube
     if args['verbose']:
         print("Making image cube")
-    image_cube = np.stack(image_stack)
+    image_cube = np.stack(image_stack,axis=2)
+    print(image_cube.shape)
 
     # Perform the cleaning step
     if args['verbose']:
@@ -179,9 +174,8 @@ if __name__ == "__main__":
         print("Writing out files")
     for i, fn in enumerate(files):
         if i > ng.twidth and i < (image_cube.shape[2] - ng.twidth):
-            image = fits.open(fn.split("\n")[0])
-            image[0].data = clean_cube[:,:,i]
-            image[0].header['cleaned'] = "{}".format(datetime.datetime.now().isoformat())
-            new_fn = fn.split(".fits")[0] + "_cleaned.fits"
-            image.write_to(new_fn)
-            image.close()
+            with fits.open(fn.split("\n")[0]) as image:
+                image[0].data = clean_cube[:,:,i]
+                image[0].header['cleaned'] = "{}".format(datetime.datetime.now().isoformat())
+                new_fn = fn.split(".fits")[0] + "_cleaned.fits"
+                fits.writeto(new_fn, image[0].data, image[0].header, overwrite=True)
