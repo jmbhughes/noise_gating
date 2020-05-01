@@ -1,182 +1,158 @@
 from astropy.io import fits
 import numpy as np
-import argparse, datetime
-from multiprocessing import Pool
+import glob
+import time
+import pyfftw.interfaces
+import argparse
+import os
 
-def wiener_filter(magnitude, threshold):
-    term = magnitude / threshold
-    return term / (1 + term)
+xwidth, ywidth, twidth = 12, 12, 12  # respective size of the window in the two spatial and one temporal domains
 
-def gate_filter(magnitude, threshold):
-    comparison = np.logical_not(magnitude < threshold)
-    comparison[5:8,5:8,5:8] = True
-    return comparison
 
-class NoiseGater:
-    ''' An approach to decrease the shot noise in images using windowed fourier transforms. 
-    This approach is based off of Deforest (2017)
-    The Astrophysical Journal, Volume 838, Issue 2, article id. 155, 10 pp. (2017). 
-    NOTE: This algorithm is under patent application by Deforest. 
-    '''
-    def __init__(self, image_cube, beta, xwidth=12, ywidth=12, twidth=12,
-                 xstep=3, ystep=3, tstep=3,
-                 gamma=3, beta_percentile=None, beta_count=None):
-        ''' Parameters: 
-        image_cube is the array of k different m,n image sections where k is the number of time components
-        beta is a provided xwidth X ywidth X twidth noise spectrum
-        xwidth, ywidth, and twidth are the size of the image sections used in fourier transform
-        xstep, ystep, tstep are how far apart the center of each image section. 
-        gamma multiplies the noise model as described in the paper for a threshold in gating
-        beta_percentile of 50 is the median of fourier transform sections described in the paper
-        beta_count is the number of image sections utilized to approximate the noise spectrum 
-        beta_count and beta_percentile will be ignored if beta is provided
-        '''
-        self.image_cube = image_cube
-        self.xwidth, self.ywidth, self.twidth = xwidth, ywidth, twidth
-        self.xstep, self.ystep, self.tstep = xstep, ystep, tstep
+def load_images(input_path, clean=True):
+    #TODO: remove defaulting size of data
+    fns = sorted(glob.glob(os.path.join(input_path, "*.fits")))
+    data = np.zeros((300, 300, len(fns)))  # this is set for SUVI imagery which is 1280x1280
+    for i, fn in enumerate(fns):
+        with fits.open(fn) as image_file:
+            img = image_file[0].data
 
-        # the coordinates for the inner most 3x3 portion of the filter, always set to True
-        self.xstart, self.xend = self.xwidth // 2 - 1, self.xwidth // 2 + 2
-        self.ystart, self.yend = self.ywidth // 2 - 1, self.ywidth // 2 + 2
-        self.tstart, self.tend = self.twidth // 2 - 1, self.twidth // 2 + 2
+            if clean:
+                # make sure all the entries are valid
+                img[np.isnan(img)] = 0
+                img[np.isinf(img)] = 0
+                img[img < 0] = 0
+                data[:, :, i] = img
+    return data
 
-        self.gamma = gamma
 
-        # build the location of all the image sections
-        self.coordinates = self._build_coordinates()
+def define_coordinates(data):
+    # define grid
+    xstart, xend, xstep = xwidth // 2, data.shape[0] - (xwidth // 2), 3
+    ystart, yend, ystep = ywidth // 2, data.shape[1] - (ywidth // 2), 3
+    tstart, tend, tstep = twidth // 2, data.shape[2] - (twidth // 2), 3
 
-        # build the hanning window
-        self.hanning_window = self._build_hanning_window()
+    x_ = np.arange(xstart, xend, xstep)
+    y_ = np.arange(ystart, yend, ystep)
+    t_ = np.arange(tstart, tend, tstep)
+    coords = []
+    for x in x_:
+        for y in y_:
+            for t in t_:
+                coords.append((x, y, t))
+    return coords
 
-        # load or build the noise model 
-        if beta == None:
-            self.beta = self.calculate_beta(beta_percentile, beta_count)
-        else:
-            self.beta = beta
 
-    def calculate_beta(self, beta_percentile=50, beta_count=1000):
-        ''' Determine the noise spectrum using the percentile and beta_count image sections '''
-        beta_stack = []
-        for i in np.random.choice(len(self.coordinates), beta_count):
-            x, y, t = self.coordinates[i]
-            image_section = self.image_cube[x-self.xwidth//2 : x+self.xwidth//2,
-                                            y-self.ywidth//2 : y+self.ywidth//2,
-                                            t-self.twidth//2 : t+self.twidth//2].copy()
-            image_section *= self.hanning_window
-            imbar = np.sum(np.sqrt(image_section))
-            fourier = np.fft.fftn(image_section)
-            fourier_magnitude = np.abs(fourier)
-            beta_stack.append(fourier_magnitude / imbar)
-        result = np.percentile(np.stack(beta_stack), beta_percentile, axis=0)
-        del beta_stack
-        return result
-    
-    def _build_coordinates(self):
-        ''' Determine center coordinates of all image sections in the image cube ''' 
-        xstart, xend, xstep = self.xwidth*2, self.image_cube.shape[0] - (self.xwidth*2), self.xstep
-        ystart, yend, ystep = self.ywidth*2, self.image_cube.shape[1] - (self.ywidth*2), self.ystep
-        tstart, tend, tstep = self.twidth*2, self.image_cube.shape[2] - (self.twidth*2), self.tstep
-        x_ = np.arange(xstart, xend, xstep)
-        y_ = np.arange(ystart, yend, ystep)
-        t_ = np.arange(tstart, tend, tstep)
-        coordinates = []
-        for x in x_:
-            for y in y_:
-                for t in t_:
-                    coordinates.append((x,y,t))
-        return coordinates
+def define_hanning():
+    # equation for a hanning window
+    hanning_window_3D = lambda x, y, t: (np.power(np.sin((x + 0.5) * np.pi / xwidth), 2.0) *
+                                         np.power(np.sin((y + 0.5) * np.pi / ywidth), 2.0) *
+                                         np.power(np.sin((t + 0.5) * np.pi / twidth), 2.0))
 
-    def _build_hanning_window(self):
-        ''' Calculate  a hanning window with the appropriate size '''
-        hanning_function = lambda x, y, t : (np.power(np.sin((x + 0.5) * np.pi / self.xwidth), 2.0) * 
-                                             np.power(np.sin((y + 0.5) * np.pi / self.ywidth), 2.0) * 
-                                             np.power(np.sin((t + 0.5) * np.pi / self.twidth), 2.0))
-        hanning = np.zeros((self.xwidth, self.ywidth, self.twidth))
-        for x in range(hanning.shape[0]):
-            for y in range(hanning.shape[1]):
-                for t in range(hanning.shape[2]):
-                    hanning[x,y,t] = hanning_function(x,y,t)
-        return hanning
-    
-    def _process_section(self, i):
-        ''' Clean image section i ''' 
-        x, y, t, = self.coordinates[i]
-        image_section = self.image_cube[x-self.xwidth//2 : x+self.xwidth//2,
-                                        y-self.ywidth//2 : y+self.ywidth//2,
-                                        t-self.twidth//2 : t+self.twidth//2].copy()
+    # set up our hanning window array
+    hanning = np.zeros((xwidth, ywidth, twidth))
+    for x in range(hanning.shape[0]):
+        for y in range(hanning.shape[1]):
+            for t in range(hanning.shape[2]):
+                hanning[x, y, t] = hanning_window_3D(x, y, t)
+    return hanning
 
-        image_section *= self.hanning_window
+
+def calculate_beta(data, coords, n=10000):
+    beta_stack = []
+
+    # for N random regions of the image cube we will take the fourier transform
+    # and use it to estimate the noise model, beta
+    for i in np.random.choice(len(coords), n):
+        x, y, t = coords[i]
+
+        # get the data
+        image_section = data[x - xwidth // 2: x + xwidth // 2,
+                        y - ywidth // 2: y + ywidth // 2,
+                        t - twidth // 2: t + twidth // 2].copy()
+
+        # sum of the square root of the image section
         imbar = np.sum(np.sqrt(image_section))
-        fourier = np.fft.fftshift(np.fft.fftn(image_section))
+
+        # take the fourier transform and get the magnitude
+        beta_fourier = pyfftw.interfaces.numpy_fft.rfftn(image_section)
+        beta_fourier_magnitude = np.abs(beta_fourier)
+
+        # add this beta term to the stack
+        beta_stack.append(beta_fourier_magnitude / imbar)
+
+    # from all the sections use the median
+    beta_approx = np.nanmedian(np.stack(beta_stack), axis=0)
+    return beta_approx
+
+
+def noise_gate(data, coords, gamma=3):
+    gated_image = np.zeros_like(data)
+    times = []
+    hanning = define_hanning()
+    # over all image sections
+    for i in range(len(coords)):
+        start = time.time()
+        x, y, t = coords[i]
+
+        # get image section copy so as not to manipulate it
+        image_section = data[x - xwidth // 2: x + xwidth // 2,
+                        y - ywidth // 2: y + ywidth // 2,
+                        t - twidth // 2: t + twidth // 2].copy()
+
+        # adjust by hanning window
+        # imbar = np.sum(np.sqrt(image_section))
+        image_section *= hanning
+        imbar = np.sum(np.sqrt(image_section))  # do imbar calculations go before or after the hanning filter?
+
+        # determine fourier magnitude
+        # fourier = fft(image_section)
+        # myfft = pyfftw.builders.rfftn(image_section)
+        # fourier = myfft()
+        fourier = pyfftw.interfaces.numpy_fft.rfftn(image_section)
+
         fourier_magnitude = np.abs(fourier)
-        
-        noise = self.beta * imbar
-        threshold = noise * self.gamma
 
-        #section_filter = wiener_filter(fourier_magnitude, threshold)
-        section_filter = gate_filter(fourier_magnitude, threshold)
-        final_fourier = fourier * section_filter
-        final_image = self.hanning_window * np.abs(np.fft.ifftn(np.fft.ifftshift(final_fourier)))
-        return final_image
+        # estimate noise and set the threshold to ignore
+        noise = beta_approx * imbar
+        threshold = noise * gamma
 
-    def clean(self):
-        final_image = np.zeros_like(self.image_cube)
-        with Pool() as p:
-            sections = p.map(self._process_section, range(len(self.coordinates)))
+        # any magnitude outside this limit is noise
+        gate_filter = fourier_magnitude >= threshold
+        final_fourier = fourier * gate_filter
 
-        for i in range(len(self.coordinates)):
-            section = sections[i]
-            print(np.min(section), np.max(section))
-            x, y, t = self.coordinates[i]
-            final_image[x-self.xwidth//2 : x+self.xwidth//2,
-                        y-self.ywidth//2 : y+self.ywidth//2,
-                        t-self.twidth//2 : t+self.twidth//2] += section
-        return final_image
-    
-def get_args():
-    ap = argparse.ArgumentParser()
-    # ap.add_argument("-b", "--beta", help = "image cube of appropriate size with beta image")
-    ap.add_argument("-f", "--files", required = True, help = "file with path to FITs images for sequence")
-    ap.add_argument("-g", "--gamma", type = float, help = "gamma level to define threshole for noise")
-    ap.add_argument("-v", "--verbose", action='store_true', help = "prints information for each step")
-    args = vars(ap.parse_args())
-    return args
+        # we can use the wiener filter instead of the gate filter here
+        # wiener_filter =  (fourier_magnitude / threshold) / (1 + (fourier_magnitude / threshold))
+        # final_fourier = fourier * wiener_filter
+
+        # adjust by hanning filter again
+        # myifft = pyfftw.builders.irfftn(final_fourier)
+
+        final_image = hanning * np.abs(pyfftw.interfaces.numpy_fft.irfftn(final_fourier))
+
+        # add into the final gated image
+        gated_image[x - xwidth // 2: x + xwidth // 2,
+        y - ywidth // 2: y + ywidth // 2,
+        t - twidth // 2: t + twidth // 2] += final_image
+
+        times.append(time.time() - start)
+
+    np.save("gated_image.npy", gated_image)
+    fits.writeto("gated_100.fits", gated_image[:, :, 100], overwrite=True)
+
 
 if __name__ == "__main__":
-    args = get_args()
+    parser = argparse.ArgumentParser(description='Noisegate some images.')
+    parser.add_argument("inpath", type=str, help="directory for input images")
+    parser.add_argument("outpath", type=str, help="directory to output images")
+    parser.add_argument("--gamma", default=3, type=float, help="noise cutoff factor", required=False)
+    args = parser.parse_args()
 
-    # Open files
-    if args['verbose']:
-        print("Opening files")
-
-    with open(args['files']) as f:
-        files = f.readlines()
-    
-    image_stack = []
-    for fn in files:
-        with fits.open(fn.split("\n")[0]) as image:
-            image_stack.append(image[0].data)
-
-    # Stack into a time dependent image cube
-    if args['verbose']:
-        print("Making image cube")
-    image_cube = np.stack(image_stack,axis=2)
-    print(image_cube.shape)
-
-    # Perform the cleaning step
-    if args['verbose']:
-        print("Cleaning image, this may take a while!")
-    ng = NoiseGater(image_cube, None, beta_percentile=50, beta_count=10000)
-    clean_cube = ng.clean() 
-
-    # Write out files
-    if args['verbose']:
-        print("Writing out files")
-    for i, fn in enumerate(files):
-        if i > ng.twidth and i < (image_cube.shape[2] - ng.twidth):
-            with fits.open(fn.split("\n")[0]) as image:
-                image[0].data = clean_cube[:,:,i]
-                image[0].header['cleaned'] = "{}".format(datetime.datetime.now().isoformat())
-                new_fn = fn.split(".fits")[0] + "_cleaned.fits"
-                fits.writeto(new_fn, image[0].data, image[0].header, overwrite=True)
-                
+    start = time.time()
+    data = load_images(args.inpath)
+    coords = define_coordinates(data)
+    hanning = define_hanning()
+    beta_approx = calculate_beta(data, coords)
+    noise_gate(data, coords)
+    end = time.time()
+    print("Completed in {:.2f} seconds".format(end-start))

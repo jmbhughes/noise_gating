@@ -8,7 +8,7 @@ setup(
     setup_requires=["pytest-runner"],
     tests_require=["pytest"],
     test_suite="tests",
-    install_requires=["numpy", "deepdish", "astropy"],
+    install_requires=["numpy", "deepdish", "astropy", "pyfftw"],
     version='0.0.1',
     author='J. Marcus Hughes',
     author_email='hughes.jmb@gmail.com',
