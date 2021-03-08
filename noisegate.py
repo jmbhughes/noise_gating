@@ -1,4 +1,5 @@
 import numpy as np
+from tqdm import tqdm
 
 fft = np.fft.fftn
 ifft = np.fft.ifftn
@@ -79,7 +80,7 @@ def noise_gate(data, coords, beta_approx, gamma=3, width=12):
     gated_image = np.zeros_like(data)
 
     # over all image sections
-    for i in range(len(coords)):
+    for i in tqdm(range(len(coords))):
         x, y, t = coords[i]
 
         # get image section copy so as not to manipulate it
