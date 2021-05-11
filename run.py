@@ -7,7 +7,8 @@ import os
 
 
 def load_data(path):
-    fns = sorted(glob.glob(path + "*.fits"))
+    fns = sorted(glob.glob(os.path.join(path, "*.fits")))
+    print(path)
     data = []
     for i, fn in enumerate(fns):
         with fits.open(fn) as image_file:
