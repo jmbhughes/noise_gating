@@ -1,22 +1,28 @@
-from setuptools import setup
+from distutils.core import setup
+from distutils.extension import Extension
+from Cython.Distutils import build_ext
 from Cython.Build import cythonize
-import numpy as np
+import numpy
 
-setup(
-    name='noise_gating',
-    version='0.0.1',
-    packages=[],
-    url='',
-    license='',
-    author='jmbhughes',
-    author_email='hughes.jmb@gmail.com',
-    description='noise gate data',
-    setup_requires=['cython',
-                    'numpy'],
-    install_requires=['numpy',
-                      'astropy',
-                      'tqdm'],
-    ext_modules=cythonize("noisegate.pyx", annotate=True),
-    include_dirs=[np.get_include()],
-    zip_safe=False,
-)
+libs = ['m', 'fftw3']
+args = ['-std=c99', '-O3']
+sources = ['src/noisegate.pyx', 'src/fft_stuff.c']
+include = ['include', numpy.get_include()]
+linkerargs = ['-Wl,-rpath,lib']
+libdirs = ['lib']
+
+
+extensions = [
+    Extension("noisegate",
+              sources=sources,
+              include_dirs=include,
+              libraries=libs,
+              library_dirs=libdirs,
+              extra_compile_args=args,
+              extra_link_args=linkerargs)
+]
+
+setup(name='noisegate',
+      packages=['noisegate'],
+      ext_modules=cythonize(extensions, annotate=True),
+      )
