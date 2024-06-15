@@ -1,7 +1,7 @@
 # Noise gater
 
-## **Deprecated**
-I highly suggest using [Craig DeForest's Cython version now](https://github.com/drzowie/image-noise-gate). 
+> [!warning]
+> This code is no longer maintained. I highly suggest using [Craig DeForest's Cython version now](https://github.com/drzowie/image-noise-gate). 
 
 ## Background
 This is a python implementation of [DeForest (2017)'s approach](https://iopscience.iop.org/article/10.3847/1538-4357/aa67f1/pdf) to reducing noise in images using regional fourier 
